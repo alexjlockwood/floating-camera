@@ -4,8 +4,11 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.IBinder;
+import android.util.Log;
 
 public class FloatingWindowService extends Service {
+  private static final String TAG = "FloatingWindowService";
+  private static final boolean DEBUG = true;
 
   private FloatingWindow mFloatingWindow;
 
@@ -30,6 +33,7 @@ public class FloatingWindowService extends Service {
 
   @Override
   public void onConfigurationChanged(Configuration newConfiguration) {
+    if (DEBUG) Log.i(TAG, "onConfigurationChanged(Configuration)");
     mFloatingWindow.onConfigurationChanged(newConfiguration);
   }
 }

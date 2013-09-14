@@ -6,30 +6,37 @@ import android.animation.ValueAnimator;
 import android.animation.ValueAnimator.AnimatorUpdateListener;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
-import android.app.ActivityOptions;
 import android.content.Context;
-import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.hardware.Camera;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.provider.MediaStore;
 import android.support.v4.view.GestureDetectorCompat;
 import android.util.Log;
-import android.view.GestureDetector.OnGestureListener;
 import android.view.GestureDetector.SimpleOnGestureListener;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
+import android.view.ScaleGestureDetector.SimpleOnScaleGestureListener;
 import android.view.View;
 import android.view.WindowManager;
 
 public class FloatingWindow implements View.OnTouchListener {
   private static final String TAG = "FloatingWindow";
+  private static final boolean DEBUG = true;
+
+  // TODO: this size works well on a Nexus 7... make this more generic later.
+  private static final int INITIAL_WIDTH = 200;
+  private static final int INITIAL_HEIGHT = 267;
+
+  private static final float MIN_SCALE_FACTOR = 0.75f;
+  private static final float MAX_SCALE_FACTOR = 3.0f;
+
+  private static final long SLEEP_DELAY_MILLIS = 5000;
 
   private static final int MSG_SNAP = 0;
 
@@ -51,7 +58,8 @@ public class FloatingWindow implements View.OnTouchListener {
   private final WindowManager.LayoutParams mWindowParams;
   private final Point mDisplaySize = new Point();
 
-  // True if on left side of screen, false if on right side of screen.
+  // True if the window is clinging to the left side of the screen; false
+  // if the window is clinging to the right side of the screen.
   private boolean mIsOnLeft;
 
   private final View mRootView;
@@ -62,45 +70,23 @@ public class FloatingWindow implements View.OnTouchListener {
   private final Point mInitialPosition = new Point();
 
   private final GestureDetectorCompat mGestureDetector;
-  private final OnGestureListener mGestureListener = new SimpleOnGestureListener() {
-
-    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
-    @Override
-    public boolean onDoubleTap(MotionEvent event) {
-      Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-      intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-        Bundle options = ActivityOptions.makeScaleUpAnimation(mRootView, 0, 0,
-            mRootView.getWidth(), mRootView.getHeight()).toBundle();
-        mContext.startActivity(intent, options);
-      } else {
-        mContext.startActivity(intent);
-      }
-      return true;
-    }
-
-    @Override
-    public boolean onSingleTapConfirmed(MotionEvent event) {
-      int fromX = mWindowParams.x;
-      int toX = mIsOnLeft ? 0 : mDisplaySize.x - mRootView.getWidth();
-      snap(fromX, toX);
-      mHandler.sendMessageDelayed(mHandler.obtainMessage(MSG_SNAP, toX, fromX), 5000);
-      return true;
-    }
-  };
+  private final ScaleGestureDetector mScaleDetector;
+  private float mScaleFactor = 1.f;
 
   private ValueAnimator mSnapAnimator;
   private boolean mAnimating;
 
   public FloatingWindow(Context context) {
-    Log.i(TAG, "FloatingWindow(Context)");
-
     mContext = context;
     mWindowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
     mWindowManager.getDefaultDisplay().getSize(mDisplaySize);
-    mWindowParams = createWindowParams(200, 267);
+    mWindowParams = createWindowParams(INITIAL_WIDTH, INITIAL_HEIGHT);
     mIsOnLeft = true;
 
+    mGestureDetector = new GestureDetectorCompat(context, new GestureListener());
+    mScaleDetector = new ScaleGestureDetector(context, new ScaleListener());
+
+    // TODO: don't hardcode cameraId '0' here... figure this out later.
     mCamera = Camera.open(0);
     CameraPreview.setCameraDisplayOrientation(context, 0, mCamera);
 
@@ -109,16 +95,13 @@ public class FloatingWindow implements View.OnTouchListener {
     mPreview.setOnTouchListener(this);
 
     mRootView = mPreview;
-    mGestureDetector = new GestureDetectorCompat(context, mGestureListener);
   }
 
   public void show() {
-    Log.i(TAG, "show()");
     mWindowManager.addView(mRootView, mWindowParams);
   }
 
   public void hide() {
-    Log.i(TAG, "hide()");
     mCamera.release();
     mWindowManager.removeView(mRootView);
   }
@@ -139,20 +122,24 @@ public class FloatingWindow implements View.OnTouchListener {
   }
 
   private void updateWindowPosition(int x, int y) {
-    Log.i(TAG, "updateWindowPosition(" + x + ", " + y + ")");
+    if (DEBUG) Log.i(TAG, "updateWindowPosition(" + x + ", " + y + ")");
     mWindowParams.x = x;
     mWindowParams.y = y;
     mWindowManager.updateViewLayout(mRootView, mWindowParams);
   }
 
+  private void updateWindowSize(int width, int height) {
+    if (DEBUG) Log.i(TAG, "updateWindowSize(" + width + ", " + height + ")");
+    mWindowParams.width = width;
+    mWindowParams.height = height;
+    mWindowManager.updateViewLayout(mRootView, mWindowParams);
+  }
+
   /** Called by the FloatingWindowService when a configuration change occurs. */
   public void onConfigurationChanged(Configuration newConfiguration) {
-    Log.i(TAG, "onConfigurationChanged(Configuration)");
-
+    // TODO: properly handle configuration changes (we probably will only have
+    // to care about orientation changes).
     mWindowManager.getDefaultDisplay().getSize(mDisplaySize);
-
-    // TODO: handle the configuration change (we probably will only have to
-    // care about orientation changes).
   }
 
   @Override
@@ -161,9 +148,10 @@ public class FloatingWindow implements View.OnTouchListener {
       return true;
     }
 
-    // Unschedule pending animations.
+    // Unschedule any pending animations.
     mHandler.removeMessages(MSG_SNAP);
 
+    mScaleDetector.onTouchEvent(event);
     mGestureDetector.onTouchEvent(event);
 
     switch (event.getActionMasked()) {
@@ -179,10 +167,10 @@ public class FloatingWindow implements View.OnTouchListener {
         int oldX = mWindowParams.x;
 
         if (oldX + windowWidth / 2 < screenWidth / 2) {
-          snap(oldX, - windowWidth / 2);
+          snap(oldX, - 2 * windowWidth / 3);
           mIsOnLeft = true;
         } else {
-          snap(oldX, screenWidth - windowWidth / 2);
+          snap(oldX, screenWidth - windowWidth / 3);
           mIsOnLeft = false;
         }
         break;
@@ -198,7 +186,8 @@ public class FloatingWindow implements View.OnTouchListener {
   }
 
   private void snap(final int fromX, final int toX) {
-    Log.i(TAG, "snap(" + fromX + ", " + toX + ")");
+    if (DEBUG) Log.i(TAG, "snap(" + fromX + ", " + toX + ")");
+
     mSnapAnimator = ValueAnimator.ofFloat(0, 1);
     mSnapAnimator.addListener(new AnimatorListenerAdapter() {
       @Override
@@ -220,6 +209,54 @@ public class FloatingWindow implements View.OnTouchListener {
       }
     });
     mSnapAnimator.start();
+  }
+
+  private class GestureListener extends SimpleOnGestureListener {
+
+    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+    @Override
+    public boolean onDoubleTap(MotionEvent event) {
+      // TODO: use the code below to launch the camera activity or take a
+      // picture?
+
+      // Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+      // intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      // if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+      // Bundle options = ActivityOptions.makeScaleUpAnimation(mRootView, 0, 0,
+      // mRootView.getWidth(), mRootView.getHeight()).toBundle();
+      // mContext.startActivity(intent, options);
+      // } else {
+      // mContext.startActivity(intent);
+      // }
+
+      // Double tap closes the camera window for now. This is temporary... will
+      // figure out the correct gesture to use later.
+      hide();
+
+      return true;
+    }
+
+    @Override
+    public boolean onSingleTapConfirmed(MotionEvent event) {
+      int fromX = mWindowParams.x;
+      int toX = mIsOnLeft ? 0 : mDisplaySize.x - mRootView.getWidth();
+      snap(fromX, toX);
+      Message snapMsg = mHandler.obtainMessage(MSG_SNAP, toX, fromX);
+      mHandler.sendMessageDelayed(snapMsg, SLEEP_DELAY_MILLIS);
+      return true;
+    }
+  }
+
+  private class ScaleListener extends SimpleOnScaleGestureListener {
+    @Override
+    public boolean onScale(ScaleGestureDetector detector) {
+        mScaleFactor *= detector.getScaleFactor();
+        mScaleFactor = Math.max(MIN_SCALE_FACTOR, Math.min(mScaleFactor, MAX_SCALE_FACTOR));
+        int newWidth = (int) (INITIAL_WIDTH * mScaleFactor);
+        int newHeight = (int) (INITIAL_HEIGHT * mScaleFactor);
+        updateWindowSize(newWidth, newHeight);
+        return true;
+    }
   }
 
 }

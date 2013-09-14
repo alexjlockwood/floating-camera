@@ -12,6 +12,7 @@ import android.view.WindowManager;
 
 public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
   private static final String TAG = "CameraPreview";
+  private static final boolean DEBUG = true;
 
   private final Context mContext;
   private final SurfaceHolder mHolder;
@@ -31,22 +32,21 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
 
   @Override
   public void surfaceCreated(SurfaceHolder holder) {
+    if (DEBUG) Log.i(TAG, "surfaceCreated(SurfaceHolder");
+
     // The Surface has been created, now tell the camera where to draw the preview.
     try {
       mCamera.setPreviewDisplay(holder);
       mCamera.startPreview();
     } catch (IOException e) {
-      Log.d(TAG, "Error setting camera preview: " + e.getMessage());
+      Log.e(TAG, "Error setting camera preview: " + e.getMessage());
     }
   }
 
   @Override
-  public void surfaceDestroyed(SurfaceHolder holder) {
-    // Take care of releasing the Camera preview in the floating window.
-  }
-
-  @Override
   public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    if (DEBUG) Log.i(TAG, "surfaceChanged(SurfaceHolder, int, int, int");
+
     if (mHolder.getSurface() == null) {
       // Preview surface does not exist.
       return;
@@ -59,8 +59,7 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
       // Tried to stop a non-existent preview, so ignore.
     }
 
-    // TODO: make this camera id generic!
-    // TODO: figure out when surfaceChanged() is even called...
+    // TODO: don't hardcode cameraId '0' here... figure this out later.
     setCameraDisplayOrientation(mContext, 0, mCamera);
 
     // Start preview with new settings.
@@ -70,6 +69,12 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
     } catch (Exception e) {
       Log.d(TAG, "Error starting camera preview: " + e.getMessage());
     }
+  }
+
+  @Override
+  public void surfaceDestroyed(SurfaceHolder holder) {
+    if (DEBUG) Log.i(TAG, "surfaceDestroyed(SurfaceHolder");
+    // Take care of releasing the Camera preview in the floating window.
   }
 
   public static void setCameraDisplayOrientation(Context context, int cameraId, Camera camera) {
